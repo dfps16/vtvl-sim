@@ -1,8 +1,8 @@
 """Reference physical parameters and baseline gains for the notebooks and tests.
 
-Runtime configuration is JSON-driven: the simulator (via run_scenarios / app.py)
-reads scenario files validated by schemas.py, so *those* are the source of truth
-for a run. This module is the shared default set the diagnostic notebooks and the
+Runtime configuration is JSON-driven: the simulator (via run_scenarios, or any
+downstream consumer calling build_setup) reads scenario files validated by
+schemas.py, so *those* are the source of truth for a run. This module is the shared default set the diagnostic notebooks and the
 dynamics tests import, kept numerically consistent with test_scenarios/*.json.
 """
 

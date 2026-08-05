@@ -16,6 +16,39 @@ def _blank_record():
     return {k: np.nan for k in _RECORD_KEYS}
 
 
+def linearize_hover(params):
+    """Jacobian linearisation of the lander dynamics about the hover trim point.
+
+    Assumptions: constant mass, no aerodynamic forces, planar 3-DoF, rigid body motion only
+    small angles about trim (theta = delta = 0), T = mg
+
+    :param params: physical parameter dict; reads 'm', 'I', 'L', 'g' only. The trim
+        thrust is derived as T = m*g, not read from the throttle bounds.
+    :return: (A, B) for the linear model e_dot = A e + B u, where the state error is
+        ordered [x, z, xdot, zdot, theta, thetadot] (matching dynamics.py) and the
+        control is the *deviation* from trim, u = [T - m*g, delta]. Any weighting
+        matrices built elsewhere must use this same ordering.
+    """
+    g = params['g']
+    m = params['m']
+    L = params['L']
+    I = params['I']
+
+    A = np.zeros((6, 6))
+    B = np.zeros((6, 2))  # Initialising A and B matrices
+
+    A[0, 2] = 1  # xdot column, x row
+    A[1, 3] = 1  # zdot column, z row
+    A[2, 4] = - g
+    A[4, 5] = 1
+
+    B[2, 1] = g
+    B[3, 0] = 1 / m
+    B[5, 1] = - m * g * L / I
+
+    return (A, B)
+
+
 class AltitudePIDController:
     """Altitude-only 1-DOF controller; gimbal fixed at δ=0, single actuator: thrust T.
 
@@ -75,7 +108,7 @@ class AltitudePIDController:
         zdot = state[3]
         error = self.r - z
         T_cmd = self.kp * error + self.ki * self.integral_sum - self.kd * zdot \
-            + params['m'] * params['g']
+                + params['m'] * params['g']
         rec = _blank_record()
         rec.update({
             'theta_cmd': 0.0,
@@ -282,18 +315,18 @@ CONTROLLER_REGISTRY = {
             "kp_theta": 16.0, "kd_theta": 6.4,
         },
         "build": lambda gains, x_target, z_target, theta_target:
-            CascadedController(gains, x_target, z_target),
+        CascadedController(gains, x_target, z_target),
     },
     "Altitude PID": {
         "gain_fields": ["kp", "ki", "kd"],
         "defaults": {"kp": 3.0, "ki": 0.0, "kd": 30.0},
         "build": lambda gains, x_target, z_target, theta_target:
-            AltitudePIDController(gains, z_target),
+        AltitudePIDController(gains, z_target),
     },
     "Attitude PD (inner-loop demo)": {
         "gain_fields": ["kp", "kd"],
         "defaults": {"kp": 16.0, "kd": 6.4},
         "build": lambda gains, x_target, z_target, theta_target:
-            AttitudePDController(gains, theta_target),
+        AttitudePDController(gains, theta_target),
     },
 }
