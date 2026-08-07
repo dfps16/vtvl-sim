@@ -1,3 +1,4 @@
+import control as control
 import numpy as np
 
 # Canonical set of per-step diagnostic signals every controller reports through
@@ -6,7 +7,7 @@ import numpy as np
 # *_des demands and theta_cmd are kept for controllers that produce them (the
 # cascade) and left NaN otherwise — nothing downstream requires them yet.
 _RECORD_KEYS = (
-    'theta_cmd', 'u_T', 'delta', 'T_cmd', 'delta_cmd',
+    'theta_cmd', 'u_thrust', 'delta', 'thrust_cmd', 'delta_cmd',
     'xddot_des', 'zddot_des', 'thetaddot_des',
 )
 
@@ -46,7 +47,37 @@ def linearize_hover(params):
     B[3, 0] = 1 / m
     B[5, 1] = - m * g * L / I
 
-    return (A, B)
+    return A, B
+
+
+def bryson_weights(targets):
+    """LQR cost weights from Bryson's rule.
+
+    Each variable is weighted by 1 / (acceptable deviation)^2, so every term in the
+    cost is dimensionless and equals 1 when that variable sits exactly at its
+    acceptable deviation.
+
+    :param targets: the 8 acceptable deviations, keyed by gain field name. Angles
+        ('theta_dev', 'thetadot_dev', 'delta_dev') are in RADIANS.
+    :return Q, R: diagonal weight matrices. Q is ordered
+        [x, z, xdot, zdot, theta, thetadot] and R is ordered [T, delta], matching the
+        state and control ordering of linearize_hover's A and B.
+    """
+    # Initialising Q and R matrices
+    Q = np.zeros((6, 6))
+    R = np.zeros((2, 2))
+
+    # Extracting target values from the target dictionary, and assigning to correct diagonal
+    Q[0, 0] = 1 / targets['x_dev'] ** 2
+    Q[1, 1] = 1 / targets['z_dev'] ** 2
+    Q[2, 2] = 1 / targets['xdot_dev'] ** 2
+    Q[3, 3] = 1 / targets['zdot_dev'] ** 2
+    Q[4, 4] = 1 / targets['theta_dev'] ** 2
+    Q[5, 5] = 1 / targets['thetadot_dev'] ** 2
+    R[0, 0] = 1 / targets['thrust_dev'] ** 2
+    R[1, 1] = 1 / targets['delta_dev'] ** 2
+
+    return Q, R
 
 
 class AltitudePIDController:
@@ -94,9 +125,9 @@ class AltitudePIDController:
 
         # Gravity feedforward shifts the operating point to hover; PID corrects only residual deviations.
         # Eliminates steady-state thrust error without relying solely on the integrator.
-        u_T = self.kp * error + self.ki * self.integral_sum - self.kd * d_term + m * g
+        u_thrust = self.kp * error + self.ki * self.integral_sum - self.kd * d_term + m * g
         u_delta = 0.0  # gimbal fixed at zero; no lateral or attitude correction
-        return (u_T, u_delta)
+        return (u_thrust, u_delta)
 
     def record(self, state, params):
         # Stateless thrust readout for diagnostics, aligned to the solution grid.
@@ -107,14 +138,14 @@ class AltitudePIDController:
         z = state[1]
         zdot = state[3]
         error = self.r - z
-        T_cmd = self.kp * error + self.ki * self.integral_sum - self.kd * zdot \
-                + params['m'] * params['g']
+        thrust_cmd = self.kp * error + self.ki * self.integral_sum - self.kd * zdot \
+                     + params['m'] * params['g']
         rec = _blank_record()
         rec.update({
             'theta_cmd': 0.0,
-            'u_T': np.clip(T_cmd, params['T_min'], params['T_max']),
+            'u_thrust': np.clip(thrust_cmd, params['thrust_min'], params['thrust_max']),
             'delta': 0.0,
-            'T_cmd': T_cmd,
+            'thrust_cmd': thrust_cmd,
             'delta_cmd': 0.0,
         })
         return rec
@@ -139,7 +170,7 @@ class AttitudePDController:
     def _hover_thrust(self, params):
         return params['m'] * params['g']
 
-    def _gimbal(self, state, params, T):
+    def _gimbal(self, state, params, thrust):
         """Return (u_delta, thetaddot_des, delta_cmd) from the inner-loop law.
 
         Stateless (θ̇ measured), so it is exact to replay post-hoc. delta_cmd is
@@ -149,7 +180,7 @@ class AttitudePDController:
         thetadot = state[5]
 
         # Control effectiveness: b = T·L/I relates sin(δ) to θ̈ via I·θ̈ = -T·L·sin(δ)
-        b = T * params['L'] / params['I']
+        b = thrust * params['L'] / params['I']
 
         thetaddot_des = self.kp * (self.r - theta) - self.kd * thetadot
         # Exact inversion δ = arcsin(-θ̈_des / b); clip guards the arcsin domain
@@ -158,19 +189,19 @@ class AttitudePDController:
         return u_delta, thetaddot_des, delta_cmd
 
     def __call__(self, t, state, params):
-        T = self._hover_thrust(params)
+        thrust = self._hover_thrust(params)
         u_delta, _, _ = self._gimbal(state, params, T)
-        return (T, u_delta)
+        return (thrust, u_delta)
 
     def record(self, state, params):
-        T = self._hover_thrust(params)
+        thrust = self._hover_thrust(params)
         u_delta, thetaddot_des, delta_cmd = self._gimbal(state, params, T)
         rec = _blank_record()
         rec.update({
             'theta_cmd': self.r,
-            'u_T': np.clip(T, params['T_min'], params['T_max']),
+            'u_thrust': np.clip(T, params['thrust_min'], params['thrust_max']),
             'delta': u_delta,
-            'T_cmd': T,
+            'thrust_cmd': thrust,
             'delta_cmd': delta_cmd,
             'thetaddot_des': thetaddot_des,
         })
@@ -228,8 +259,8 @@ class CascadedController:
 
         m = params['m']
         g = params['g']
-        T_min = params['T_min']
-        T_max = params['T_max']
+        thrust_min = params['thrust_min']
+        thrust_max = params['thrust_max']
 
         # ── Middle loop: altitude → thrust ─────────────────────────────────────
         e_z = self.r_z - z
@@ -241,12 +272,12 @@ class CascadedController:
         # cos(θ) → 0 as |θ| → 90°; TVC saturation keeps this well-conditioned in practice.
 
         zddot_des = self.kp_z * e_z - self.kd_z * zdot + feedforward_z
-        T_des = zddot_des * m
-        u_T = np.clip(T_des, T_min, T_max)  # actuator saturation applied before attitude inversion
-        # T_des returned alongside u_T so callers can see the pre-saturation demand
-        return u_T, zddot_des, T_des
+        thrust_des = zddot_des * m
+        u_thrust = np.clip(thrust_des, thrust_min, thrust_max)  # actuator saturation applied before attitude inversion
+        # thrust_des returned alongside u_thrust so callers can see the pre-saturation demand
+        return u_thrust, zddot_des, thrust_des
 
-    def commanded_thrust_vector(self, state, params, r_theta, u_T):
+    def commanded_thrust_vector(self, state, params, r_theta, u_thrust):
         # State vector: [x, z, ẋ, ż, θ, θ̇]
         theta = state[4]
         thetadot = state[5]
@@ -257,9 +288,9 @@ class CascadedController:
         delta_max = params['delta_max']
 
         # ── Inner loop: pitch attitude → TVC angle ─────────────────────────────
-        # Rotational EOM: I·θ̈ = -T·L·sin(δ)  →  control effectiveness b = T·L/I.
-        # u_T (post-saturation) is used so that b reflects the torque actually available.
-        b = u_T * L / I
+        # Rotational EOM: I·θ̈ = -thrust·L·sin(δ)  →  control effectiveness b = thrust·L/I.
+        # u_thrust (post-saturation) is used so that b reflects the torque actually available.
+        b = u_thrust * L / I
 
         e_theta = r_theta - theta
         # PD law specifies desired angular acceleration
@@ -277,23 +308,23 @@ class CascadedController:
 
     def __call__(self, t, state, params):
         r_theta, xddot_des = self.commanded_tilt(state, params)
-        u_T, zddot_des, T_des = self.commanded_thrust(state, params)
+        u_thrust, zddot_des, T_des = self.commanded_thrust(state, params)
         u_delta, thetaddot_des, delta_des = self.commanded_thrust_vector(
-            state, params, r_theta=r_theta, u_T=u_T
+            state, params, r_theta=r_theta, u_thrust=u_thrust
         )
-        return (u_T, u_delta)
+        return u_thrust, u_delta
 
     def record(self, state, params):
         r_theta, xddot_des = self.commanded_tilt(state, params)
-        u_T, zddot_des, T_cmd = self.commanded_thrust(state, params)
+        u_thrust, zddot_des, thrust_cmd = self.commanded_thrust(state, params)
         u_delta, thetaddot_des, delta_cmd = self.commanded_thrust_vector(
-            state, params, r_theta, u_T
+            state, params, r_theta, u_thrust
         )
         return {
             'theta_cmd': r_theta,
-            'u_T': u_T,
+            'u_thrust': u_thrust,
             'delta': u_delta,
-            'T_cmd': T_cmd,
+            'thrust_cmd': thrust_cmd,
             'delta_cmd': delta_cmd,
             'xddot_des': xddot_des,
             'zddot_des': zddot_des,
@@ -301,11 +332,40 @@ class CascadedController:
         }
 
 
-# Registry of selectable controllers. Each entry declares the gain fields it
-# needs (validated against the scenario JSON), sensible default gains (used to
-# seed the GUI when a controller is selected), and a builder. Every builder takes
-# the same (gains, x_target, z_target, theta_target) so the solver can construct
-# any controller uniformly; each ignores the targets it does not use.
+class LQRController:
+    def __init__(self, gains, x_target, z_target, theta_target):
+        self.targets = gains
+        self.reference_vector = np.array([x_target, z_target, 0, 0, 0, 0])  # Landing terminal conditions,
+        # theta_target is ignored
+        self._K = None
+
+    def _compute_K(self, params):
+        A, B = linearize_hover(params)
+        Q, R = bryson_weights(self.targets)
+        self._K, *_ = control.lqr(A, B, Q, R)
+        return self._K
+
+    def control_law(self, state, params):
+        if self._K is None:
+            self._K = self._compute_K(params)  # This only works as long as mass is a constant
+        e = np.asarray(state) - self.reference_vector
+        du = - self._K @ e
+        thrust = params['m'] * params['g'] + du[0]  # du only accounts for the deviation from hover,
+        # we here restore the full thrust command
+        delta = du[1]
+        return thrust, delta
+
+    def __call__(self, t, state, params):
+        thrust, delta = self.control_law(state, params)
+        return thrust, delta
+
+    def record(self, state, params):
+        record = _blank_record()
+        record['thrust_cmd'], record['delta_cmd'] = self.control_law(state, params)
+        return record
+
+
+# Registry of selectable controllers. Each carries their gains with some defaults, and their build lambda
 CONTROLLER_REGISTRY = {
     "Cascaded PD": {
         "gain_fields": ["kp_x", "kd_x", "kp_z", "kd_z", "kp_theta", "kd_theta"],
@@ -328,5 +388,12 @@ CONTROLLER_REGISTRY = {
         "defaults": {"kp": 16.0, "kd": 6.4},
         "build": lambda gains, x_target, z_target, theta_target:
         AttitudePDController(gains, theta_target),
+    },
+    "LQR": {
+        "gain_fields": ["x_dev", "z_dev", "xdot_dev", "zdot_dev", "theta_dev", "thetadot_dev", "thrust_dev",
+                        "delta_dev"],
+        "defaults": {"kp": 16.0, "kd": 6.4},
+        "build": lambda gains, x_target, z_target, theta_target:
+        LQRController(gains, x_target, z_target, theta_target),
     },
 }
