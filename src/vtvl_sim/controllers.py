@@ -7,7 +7,7 @@ import numpy as np
 # *_des demands and theta_cmd are kept for controllers that produce them (the
 # cascade) and left NaN otherwise — nothing downstream requires them yet.
 _RECORD_KEYS = (
-    'theta_cmd', 'u_thrust', 'delta', 'thrust_cmd', 'delta_cmd',
+    'theta_cmd', 'u_T', 'delta', 'T_cmd', 'delta_cmd',
     'xddot_des', 'zddot_des', 'thetaddot_des',
 )
 
@@ -143,9 +143,9 @@ class AltitudePIDController:
         rec = _blank_record()
         rec.update({
             'theta_cmd': 0.0,
-            'u_thrust': np.clip(thrust_cmd, params['thrust_min'], params['thrust_max']),
+            'u_T': np.clip(thrust_cmd, params['T_min'], params['T_max']),
             'delta': 0.0,
-            'thrust_cmd': thrust_cmd,
+            'T_cmd': thrust_cmd,
             'delta_cmd': 0.0,
         })
         return rec
@@ -190,18 +190,18 @@ class AttitudePDController:
 
     def __call__(self, t, state, params):
         thrust = self._hover_thrust(params)
-        u_delta, _, _ = self._gimbal(state, params, T)
-        return (thrust, u_delta)
+        u_delta, _, _ = self._gimbal(state, params, thrust)
+        return thrust, u_delta
 
     def record(self, state, params):
         thrust = self._hover_thrust(params)
-        u_delta, thetaddot_des, delta_cmd = self._gimbal(state, params, T)
+        u_delta, thetaddot_des, delta_cmd = self._gimbal(state, params, thrust)
         rec = _blank_record()
         rec.update({
             'theta_cmd': self.r,
-            'u_thrust': np.clip(T, params['thrust_min'], params['thrust_max']),
+            'u_T': np.clip(thrust, params['T_min'], params['T_max']),
             'delta': u_delta,
-            'thrust_cmd': thrust,
+            'T_cmd': thrust,
             'delta_cmd': delta_cmd,
             'thetaddot_des': thetaddot_des,
         })
@@ -259,8 +259,8 @@ class CascadedController:
 
         m = params['m']
         g = params['g']
-        thrust_min = params['thrust_min']
-        thrust_max = params['thrust_max']
+        thrust_min = params['T_min']
+        thrust_max = params['T_max']
 
         # ── Middle loop: altitude → thrust ─────────────────────────────────────
         e_z = self.r_z - z
@@ -322,9 +322,9 @@ class CascadedController:
         )
         return {
             'theta_cmd': r_theta,
-            'u_thrust': u_thrust,
+            'u_T': u_thrust,
             'delta': u_delta,
-            'thrust_cmd': thrust_cmd,
+            'T_cmd': thrust_cmd,
             'delta_cmd': delta_cmd,
             'xddot_des': xddot_des,
             'zddot_des': zddot_des,
@@ -360,9 +360,17 @@ class LQRController:
         return thrust, delta
 
     def record(self, state, params):
-        record = _blank_record()
-        record['thrust_cmd'], record['delta_cmd'] = self.control_law(state, params)
-        return record
+        thrust_cmd, delta_cmd = self.control_law(state, params)
+        rec = _blank_record()
+        rec.update({
+            'T_cmd': thrust_cmd,
+            'delta_cmd': delta_cmd,
+            # Mirror sim.py's closed_loop_rhs clip exactly, so the gap between the
+            # *_cmd and post-clip values is the saturation diagnostic.
+            'u_T': np.clip(thrust_cmd, params['T_min'], params['T_max']),
+            'delta': np.clip(delta_cmd, -params['delta_max'], params['delta_max']),
+        })
+        return rec
 
 
 # Registry of selectable controllers. Each carries their gains with some defaults, and their build lambda
@@ -390,9 +398,15 @@ CONTROLLER_REGISTRY = {
         AttitudePDController(gains, theta_target),
     },
     "LQR": {
-        "gain_fields": ["x_dev", "z_dev", "xdot_dev", "zdot_dev", "theta_dev", "thetadot_dev", "thrust_dev",
-                        "delta_dev"],
-        "defaults": {"kp": 16.0, "kd": 6.4},
+        "gain_fields": ["x_dev", "z_dev", "xdot_dev", "zdot_dev", "theta_dev", "thetadot_dev", "thrust_dev", "delta_dev"],
+        "defaults": {"x_dev": 20.0,
+                     "z_dev": 10.0,
+                     "xdot_dev": 10.0,
+                     "zdot_dev": 2.0,
+                     "theta_dev": 0.1745,
+                     "thetadot_dev": 0.3,
+                     "thrust_dev": 750.0,
+                     "delta_dev": 0.2094, },
         "build": lambda gains, x_target, z_target, theta_target:
         LQRController(gains, x_target, z_target, theta_target),
     },
