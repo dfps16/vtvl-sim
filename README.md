@@ -40,7 +40,7 @@ vtvl-sim/
 │       ├── paths.py           — centralised results-directory paths (no hardcoded absolute paths)
 │       ├── dynamics.py        — 3-DOF EOM
 │       ├── sim.py             — vtvl_solver/sim_run: solve_ivp wrapper, phase chaining, touchdown event
-│       ├── controllers.py     — Altitude PID, Attitude PD (inner-loop demo), Cascaded PD, all in CONTROLLER_REGISTRY; LQR not yet added
+│       ├── controllers.py     — Altitude PID, Attitude PD (inner-loop demo), Cascaded PD, LQR — all in CONTROLLER_REGISTRY
 │       ├── schemas.py         — Pydantic models validating scenario JSON files
 │       ├── scenario_io.py     — load_scenario / build_setup: JSON -> validated sim/solver/output setup
 │       ├── post_processing.py — CSV export, touchdown report, state/trajectory/engine metrics
@@ -53,9 +53,12 @@ vtvl-sim/
 │   ├── check_attitude.py    — inner-loop verification against design targets
 │   └── check_cascade.py     — full cascade divert-and-land scenario
 ├── results/              — saved diagnostic plots (generated, gitignored)
+├── PLAN.md               — LQR recap + theory, and the mass-depletion implementation plan
+├── REPORT_NOTES.md       — running log of report-worthy findings, appended to as work proceeds
 └── tests/
     ├── dynamics_test.py       — free-fall and hover equilibrium
-    └── attitude_test_plan.md  — inner-loop regression spec (planned)
+    ├── lqr_test.py            — controllability, closed-loop stability, gain structure, landing regression
+    └── attitude_test_plan.md  — inner-loop regression spec (planned, not yet written)
 ```
 
 ---
@@ -95,13 +98,42 @@ Gains are derived from design targets `(ζ, ωₙ)` assuming an ideal 2nd-order 
 
 **Remaining:** write the inner-loop regression suite (`tests/attitude_test_plan.md` specs it — steady-state error, overshoot vs linear prediction, sign convention, saturation) and extend regression coverage to the closed-loop lateral channel.
 
-### Week 3 — LQR (planned)
+### Week 3 — LQR (complete)
 
-Linearise about hover, controllability check, full-state feedback design, mass depletion, disturbance injection, comparison against cascaded PD.
+`linearize_hover()` and `bryson_weights()` in `controllers.py` implement the trim-point
+Jacobian linearisation and Bryson's-rule cost weighting; `LQRController` is registered in
+`CONTROLLER_REGISTRY` with empirically-tuned (not textbook-default) gains — the naive
+Bryson defaults crash the vehicle, see `PLAN.md` §1 for why. Gated by a controllability
+check (`rank(ctrb(A,B)) == 6`) and closed-loop stability (`Re(eig(A−BK)) < 0`), both
+covered by `tests/lqr_test.py` (4 tests, all passing) alongside a closed-form gain-structure
+check and a landing-survivability regression on `test_scenarios/lqr1.json`.
 
-### Week 4 — guidance stretch + write-up (planned)
+Head-to-head against the cascade on identical geometry (100 m drop, 20 m lateral offset):
 
-Convex G-FOLD reference tracked by LQR, or Monte Carlo dispersion analysis if skipping guidance. Animation. README becomes the short technical report.
+| | Cascaded PD | LQR (tuned) |
+|---|---|---|
+| Touchdown time | 17.6 s | 24.8 s |
+| Touchdown ż | −0.35 m/s | **−0.20 m/s** |
+| Lateral error | −0.35 m | **+0.14 m** |
+| Peak \|θ\| | 10.1° | **7.0°** |
+| Gimbal saturated | 3.4% | **0.0%** |
+
+LQR trades speed for staying inside the linear/actuator-comfortable regime — see
+`REPORT_NOTES.md` §6 for the full table and `PLAN.md` §1 for the theory (trim/cyclic
+coordinates, the corrected lateral transfer function, the closed-form position-channel
+gains, and why the two channels tune independently).
+
+**Known limitation, next up:** the model is constant-mass. `LQRController` caches its
+gain `K` on the first call and never recomputes it — correct only because mass never
+changes today. `PLAN.md` §2 is the implementation plan for mass depletion, which breaks
+that assumption and requires gain-scheduling `K` on the instantaneous mass.
+
+### Week 4 — mass depletion, then guidance stretch + write-up (planned)
+
+Mass depletion (`PLAN.md` §2) first — it's the natural next step now that both
+controllers exist to compare under it. After that: convex G-FOLD reference tracked by
+LQR, or Monte Carlo dispersion analysis if skipping guidance (open decision, see
+`PLAN.md` §3). Animation. README becomes the short technical report.
 
 ---
 
@@ -120,7 +152,9 @@ Runtime configuration is JSON-driven — a run's parameters come from its scenar
 | `δ_max` | 12° | Gimbal deflection limit |
 | `tilt_limit` | 10° | Pitch reference clamp (outer-loop θ_cmd limit) |
 
-Mass depletion is deferred to Week 3 (known technical debt); LQR gains computed at fixed mass will need revisiting before the controller comparison is final.
+Mass depletion is planned next (`PLAN.md` §2); both controllers currently assume `m` is
+fixed for the run, and the head-to-head comparison above is only valid under that
+assumption.
 
 ---
 
