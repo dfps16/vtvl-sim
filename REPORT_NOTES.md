@@ -336,9 +336,10 @@ cascade — but the LQR one is explicit and re-tunable through a single scalar r
 
 ### 7.1 A 20 kg propellant margin is insufficient for gains tuned at constant mass [verified]
 
-`PLAN.md` §2.3 sets `initial_state.m = 220 kg` against `m_dry = 200 kg` — 20 kg (10%) of
-propellant, chosen as "enough to be a real, visible depletion effect... without dominating
-the linearisation." Running all three scenarios end-to-end through the completed mechanism
+`test_scenarios/lqr1.json` and `default.json` set `initial_state.m = 220 kg` against
+`m_dry = 200 kg` — 20 kg (10%) of propellant, chosen as enough to be a real, visible
+depletion effect without dominating the linearisation. Running all three scenarios
+end-to-end through the completed mechanism
 (7-state EOM, mass-injected `ctrl_params`, gain-scheduled `K`, `propellant_expended_event`)
 shows that margin is tight to insufficient for controllers whose gains were tuned in Part 1
 under the constant-mass assumption:
@@ -361,11 +362,12 @@ its second phase.
 **Report angle:** mass depletion doesn't just add a state to track — it exposes that Part 1's
 controllers were only ever validated against a mass budget that, once tied to a stated `Isp`
 and realistic mission duration, turns out to be optimistic. This is the evidence motivating
-`PLAN.md` §2.8's deferred follow-up (no re-tuning bundled into the mass-depletion pass itself):
+a deferred follow-up (deliberately not bundled into the mass-depletion implementation itself):
 either the propellant margin needs revisiting or both controllers' gains need a genuine re-tune
 under the depleting-mass model — LQR's especially, since its very design choice (spend time,
 save actuator effort) is what makes it the more fuel-hungry of the two here.
 
-**Caveat:** these numbers come from a working mechanism but predate `tests/mass_depletion_test.py`
-(`PLAN.md` §2.6, not yet written) — treat as provisional until that suite, and the `uv run pytest
-tests/ -v` + end-to-end gate, are green.
+**Confirmed, not provisional:** `tests/mass_depletion_test.py`'s 4 tests — including
+`test_both_controllers_still_land`, which encodes this exact split (cascade lands, LQR
+flames out) as the expected outcome — and the full suite (`uv run pytest tests/ -v`,
+14/14) are green, and both scenarios run end-to-end via the CLI without error.

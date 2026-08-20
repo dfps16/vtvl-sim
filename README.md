@@ -54,7 +54,6 @@ vtvl-sim/
 │   ├── check_attitude.py    — inner-loop verification against design targets
 │   └── check_cascade.py     — full cascade divert-and-land scenario
 ├── results/              — saved diagnostic plots (generated, gitignored)
-├── PLAN.md               — LQR recap + theory, and the mass-depletion implementation plan
 ├── REPORT_NOTES.md       — running log of report-worthy findings, appended to as work proceeds
 └── tests/
     ├── dynamics_test.py       — free-fall and mass-aware hover equilibrium
@@ -106,7 +105,7 @@ Gains are derived from design targets `(ζ, ωₙ)` assuming an ideal 2nd-order 
 `linearize_hover()` and `bryson_weights()` in `controllers.py` implement the trim-point
 Jacobian linearisation and Bryson's-rule cost weighting; `LQRController` is registered in
 `CONTROLLER_REGISTRY` with empirically-tuned (not textbook-default) gains — the naive
-Bryson defaults crash the vehicle, see `PLAN.md` §1 for why. Gated by a controllability
+Bryson defaults crash the vehicle, see `REPORT_NOTES.md` §4.2 for why. Gated by a controllability
 check (`rank(ctrb(A,B)) == 6`) and closed-loop stability (`Re(eig(A−BK)) < 0`), both
 covered by `tests/lqr_test.py` (4 tests, all passing) alongside a closed-form gain-structure
 check and a landing-survivability regression on `test_scenarios/lqr1.json`.
@@ -122,7 +121,7 @@ Head-to-head against the cascade on identical geometry (100 m drop, 20 m lateral
 | Gimbal saturated | 3.4% | **0.0%** |
 
 LQR trades speed for staying inside the linear/actuator-comfortable regime — see
-`REPORT_NOTES.md` §6 for the full table and `PLAN.md` §1 for the theory (trim/cyclic
+`REPORT_NOTES.md` §6 for the full table and §1–3 for the theory (trim/cyclic
 coordinates, the corrected lateral transfer function, the closed-form position-channel
 gains, and why the two channels tune independently).
 
@@ -132,7 +131,7 @@ gains, and why the two channels tune independently).
 
 ### Week 4 — mass depletion (complete), guidance stretch + write-up (open)
 
-`PLAN.md` §2 is fully implemented: mass is a 7th state (`dynamics.py`), integrated via
+Mass depletion is fully implemented: mass is a 7th state (`dynamics.py`), integrated via
 the Tsiolkovsky rate `ṁ = -T/(g·Isp)`; `sim.py` injects the instantaneous mass into every
 controller call and adds a `propellant_expended` terminal event (mirroring `touchdown`),
 so a run that runs dry before landing is reported distinctly as a **flameout** rather than
@@ -151,8 +150,8 @@ actuator authority) burns *more total propellant* than the cascade despite lower
 instantaneous thrust, and currently flames out short of touchdown on the same geometry the
 cascade lands on cleanly. Not a bug — a direct, documented consequence of gains tuned at
 constant mass; see `REPORT_NOTES.md` §7. A deliberate re-tune under the depleting-mass
-model is the natural next step (`PLAN.md` §2.8), deferred so the mechanism could be
-verified correct first.
+model is the natural next step, deferred so the mechanism could be verified correct
+first.
 
 Still open: the guidance stretch choice — convex G-FOLD reference tracked by LQR, or
 Monte Carlo dispersion analysis if skipping guidance — and the eventual re-tune above.
