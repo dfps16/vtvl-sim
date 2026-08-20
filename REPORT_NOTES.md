@@ -329,3 +329,43 @@ real, not merely unreported, difference.)
 Headline: **the cascade buys speed with actuator aggression; LQR spends time to stay in the
 linear regime.** Both are design choices — encoded in `Q`/`R` for LQR, in `ζ`/`ωₙ` for the
 cascade — but the LQR one is explicit and re-tunable through a single scalar ratio.
+
+---
+
+## 7. Mass depletion
+
+### 7.1 A 20 kg propellant margin is insufficient for gains tuned at constant mass [verified]
+
+`PLAN.md` §2.3 sets `initial_state.m = 220 kg` against `m_dry = 200 kg` — 20 kg (10%) of
+propellant, chosen as "enough to be a real, visible depletion effect... without dominating
+the linearisation." Running all three scenarios end-to-end through the completed mechanism
+(7-state EOM, mass-injected `ctrl_params`, gain-scheduled `K`, `propellant_expended_event`)
+shows that margin is tight to insufficient for controllers whose gains were tuned in Part 1
+under the constant-mass assumption:
+
+| Scenario | Controller | Outcome | Propellant used | Notes |
+|---|---|---|---|---|
+| `default.json` (100 m drop, 20 m lateral offset, single phase) | Cascaded PD | Landed | 17.9 / 20 kg | `ż = −0.37 m/s`, closely matches the Part 1 constant-mass baseline |
+| `lqr1.json` (identical geometry) | LQR | **Flameout** | 20 / 20 kg | Runs dry at `t = 19.1 s`, `z = 2.9 m` — short of touchdown |
+| `scenario1.json` (2-phase divert: 0→100 m/10 m, then →20 m/0 m) | Cascaded PD | **Flameout** | 20 / 20 kg | Runs dry mid-ascent in phase 1 (`z = 98.3 m`, still climbing) |
+
+The cascade survives its single-phase descent with 2.1 kg to spare, but LQR — on the exact
+same geometry — burns the full margin and stops 2.9 m short of the ground. This tracks with
+§2.6: LQR's cost function makes thrust nearly free (`R_T ≈ 1.8e-6` against `Q_θ ≈ 33`), so it
+chooses a slow, low-thrust-effort descent (dominant pole `−0.20`, ≈25 s) — lower *instantaneous*
+thrust, but sustained over enough extra time that *total* propellant consumed comes out higher,
+not lower, than the cascade's faster, more aggressive trajectory. The two-phase divert scenario
+is more fuel-hungry than either single-phase case and exhausts its margin before even reaching
+its second phase.
+
+**Report angle:** mass depletion doesn't just add a state to track — it exposes that Part 1's
+controllers were only ever validated against a mass budget that, once tied to a stated `Isp`
+and realistic mission duration, turns out to be optimistic. This is the evidence motivating
+`PLAN.md` §2.8's deferred follow-up (no re-tuning bundled into the mass-depletion pass itself):
+either the propellant margin needs revisiting or both controllers' gains need a genuine re-tune
+under the depleting-mass model — LQR's especially, since its very design choice (spend time,
+save actuator effort) is what makes it the more fuel-hungry of the two here.
+
+**Caveat:** these numbers come from a working mechanism but predate `tests/mass_depletion_test.py`
+(`PLAN.md` §2.6, not yet written) — treat as provisional until that suite, and the `uv run pytest
+tests/ -v` + end-to-end gate, are green.

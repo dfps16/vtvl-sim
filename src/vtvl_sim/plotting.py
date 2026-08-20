@@ -366,6 +366,7 @@ def animate_descent(sim_results, sim_setup,
         t, [x, z, theta, delta, thr_act, thr_cmd, speed], fps, playback_speed
     )
     z_u_pos = np.interp(t_u, t, z)  # altitude for HUD (same as z_u, kept explicit)
+    prop_u = np.interp(t_u, t, sim_results['m']) - sim_setup['params']['m_dry']
 
     # Fixed axis limits (equal aspect) from trajectory + target extents, padded.
     tx = [p[0] for p in targets]
@@ -464,6 +465,7 @@ def animate_descent(sim_results, sim_setup,
             f'alt    = {z_u_pos[i]:6.1f} m\n'
             f'speed  = {sp_u[i]:6.2f} m/s\n'
             f'theta  = {np.degrees(th_u[i]):6.2f} deg\n'
+            f'prop   = {prop_u[i]:6.2f} kg\n'
             f'thrott   cmd={cmd_u[i] * 100:6.1f} %  act={act_u[i] * 100:6.1f} %'
         )
         return body, legs, flame, trail, hud
