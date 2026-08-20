@@ -116,6 +116,7 @@ def compute_touchdown_metrics(sim_setup, sim_results):
     xdot = sim_results['xdot']
     zdot = sim_results['zdot']
     theta = sim_results['theta']
+    m = sim_results['m']
 
     vel_touchdown = np.sqrt(xdot[-1] ** 2 + zdot[-1] ** 2)
     angle_touchdown_deg = np.degrees(theta[-1])
@@ -123,13 +124,27 @@ def compute_touchdown_metrics(sim_setup, sim_results):
     altitude_error = z_target - z[-1]
     touchdown_error = x_target - x[-1]
     touchdown_time = t[-1]
-    landed = altitude_error < sim_setup['landing_tolerance']
+    # Symmetric: only within landing_tolerance of the target counts as landed.
+    # The old one-sided check (altitude_error < tolerance) was true for *any*
+    # altitude at or above the target, so a flameout stopped mid-air also read
+    # as a touchdown. The +1e-6 slack absorbs solve_ivp's event root-finding
+    # residual: touchdown_event stops exactly at z == landing_tolerance, so a
+    # genuine touchdown lands right on the boundary, not strictly inside it.
+    landed = abs(altitude_error) <= sim_setup['landing_tolerance'] + 1e-6
+    propellant_remaining = m[-1] - params['m_dry']
+    flameout = (not landed) and propellant_remaining <= 1e-6
 
     total_impulse = np.trapezoid(thrust, t)
+    # Post-hoc estimate: integrating T/(g*isp) over the recorded thrust trace.
     propellant_mass = total_impulse / (params['g'] * isp)
+    # Actual: the real mass loss the ODE integrator produced. These two are the
+    # same physical quantity computed two different ways (Tsiolkovsky integral
+    # vs. direct state integration) and should agree closely — see PLAN.md §2.7.
+    propellant_actual = m[0] - m[-1]
 
     return {
         'landed': landed,
+        'flameout': flameout,
         'touchdown_time': touchdown_time,
         'touchdown_error': touchdown_error,
         'vel_touchdown': vel_touchdown,
@@ -137,6 +152,8 @@ def compute_touchdown_metrics(sim_setup, sim_results):
         'altitude_error': altitude_error,
         'total_impulse': total_impulse,
         'propellant_mass': propellant_mass,
+        'propellant_remaining': propellant_remaining,
+        'propellant_actual': propellant_actual,
     }
 
 
@@ -151,10 +168,20 @@ def write_sim_report(sim_setup, sim_results, save_path=result_path('last_sim_rep
             f.write(f"Touchdown x-error {m['touchdown_error']:.3g} m --\n")
             f.write(f"Touchdown velocity {m['vel_touchdown']:.3g} m/s --\n")
             f.write(f"Touchdown angle {m['angle_touchdown_deg']:.3g} deg --\n")
+        elif m['flameout']:
+            f.write("Flameout --\n")
+            f.write(f"Final altitude: {m['altitude_error']:.3g} m --\n")
+            f.write(f"Final x error: {m['touchdown_error']:.3g} m --\n")
+            f.write(f"Propellant remaining {m['propellant_remaining']:.3g} kg --\n")
         else:
             f.write("No touchdown achieved --\n")
             f.write(f"Final altitude: {m['altitude_error']:.3g} m --\n")
             f.write(f"Final x error: {m['touchdown_error']:.3g} m --\n")
+            f.write(f"Propellant remaining {m['propellant_remaining']:.3g} kg --\n")
         f.write("Usage --\n")
         f.write(f"Total impulse required {m['total_impulse']:.2f} Ns\n")
-        f.write(f"Propellant mass required {m['propellant_mass']:.2f} kg\n")
+        f.write(f"Propellant used (post-hoc estimate, from thrust integral) {m['propellant_mass']:.2f} kg\n")
+        f.write(f"Propellant used (actual, integrated by the solver) {m['propellant_actual']:.2f} kg\n")
+        f.write(f"Cross-check difference {abs(m['propellant_mass'] - m['propellant_actual']):.4f} kg\n")
+        f.write(f"Cross-check difference {abs(m['propellant_mass'] - m['propellant_actual']):.4f} kg\n")
+        f.write(f"Propellant remaining {m['propellant_remaining']:.3g} kg\n")

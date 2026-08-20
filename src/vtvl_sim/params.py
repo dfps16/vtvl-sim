@@ -1,8 +1,8 @@
 """Reference physical parameters and baseline gains for the notebooks and tests.
 
-Runtime configuration is JSON-driven: the simulator (via run_scenarios / app.py)
-reads scenario files validated by schemas.py, so *those* are the source of truth
-for a run. This module is the shared default set the diagnostic notebooks and the
+Runtime configuration is JSON-driven: the simulator (via run_scenarios, or any
+downstream consumer calling build_setup) reads scenario files validated by
+schemas.py, so *those* are the source of truth for a run. This module is the shared default set the diagnostic notebooks and the
 dynamics tests import, kept numerically consistent with test_scenarios/*.json.
 """
 
@@ -13,7 +13,12 @@ import numpy as np
 T_MAX = 2500.0  # N, ~1.27x hover weight (m*g = 1962 N at m=200 kg)
 
 PARAMS = {
-    'm': 200.0,                   # kg   dry mass
+    # Reference mass for standalone linearisation/hover diagnostics (notebooks,
+    # lqr_test's controllability/stability/gain-structure checks) — these reason
+    # about the plant at one fixed mass and never touch the 7-state EOM, so this
+    # is not the same field as ParamsSchema's `m_dry`. dynamics.py never reads
+    # this: mass comes from state[6] once mass depletion is in play.
+    'm': 200.0,                   # kg   reference/nominal mass
     'I': 200.0,                   # kg.m^2  pitch moment of inertia
     'L': 0.5,                     # m    CoM-to-gimbal moment arm
     'g': 9.81,                    # m/s^2

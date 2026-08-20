@@ -1,8 +1,7 @@
 # Inner Attitude Loop — Regression Test Architecture
 
-Status: **planned, not yet implemented.** This document specifies the test so it
-can be written later without re-deriving the rationale. Target file:
-`tests/attitude_test.py`, run via `pytest tests/ -v` from the repo root.
+Status: **implemented** — `tests/attitude_test.py`, 4/4 passing. This document
+remains as the rationale/spec behind those tests.
 
 ## Purpose and scope
 

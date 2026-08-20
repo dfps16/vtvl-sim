@@ -6,6 +6,7 @@ import numpy as np
 from matplotlib import animation, font_manager
 from matplotlib.figure import Figure
 from matplotlib.patches import Polygon
+from scipy.integrate import cumulative_trapezoid
 
 from vtvl_sim.post_processing import engine_signals
 
@@ -146,7 +147,7 @@ def plot_engine(sim_results, sim_setup):
     params = sim_setup['params']
     T_max = params['T_max']
     T_min = params['T_min']
-    T_hover = params['m'] * params['g']
+    T_hover = sim_results['m'] * params['g']  # tracks instantaneous mass, not a fixed reference
     delta_max_deg = np.degrees(params['delta_max'])
 
     T_cmd, T_act, _, _ = engine_signals(sim_results, sim_setup)
@@ -159,7 +160,7 @@ def plot_engine(sim_results, sim_setup):
     axes[0].plot(t, T_act, color=_WHITE, linewidth=1.5, label='T (applied)')
     axes[0].axhline(T_max, color=_WHITE, linestyle=':', linewidth=0.8, alpha=0.35, label='T_min / T_max')
     axes[0].axhline(T_min, color=_WHITE, linestyle=':', linewidth=0.8, alpha=0.35)
-    axes[0].axhline(T_hover, color=_WHITE, linestyle='-.', linewidth=0.8, alpha=0.25, label='hover (mg)')
+    axes[0].plot(t, T_hover, color=_WHITE, linestyle='-.', linewidth=0.8, alpha=0.25, label='hover (mg)')
     # Shade the spans where the demand is outside the throttle box — i.e. where
     # the controller asked for thrust the engine could not deliver.
     axes[0].fill_between(t, T_min, T_max, where=(T_cmd > T_max) | (T_cmd < T_min),
@@ -207,6 +208,67 @@ def plot_engine(sim_results, sim_setup):
     axes[2].grid(True)
 
     fig.suptitle('Engine State', fontsize=18, fontweight='bold')
+    fig.tight_layout()
+    return fig
+
+
+def plot_propellant(sim_results, sim_setup):
+    """Mass depletion and cumulative impulse, with a built-in cross-check.
+
+    Two independent ways of tracking propellant use should agree: the ODE
+    integrator's actual mass loss (state[6], panel 1) and the post-hoc integral
+    of applied thrust via the Tsiolkovsky relation (panel 2, right axis). They
+    are the same physical integral computed two different ways — divergence
+    between the two curves in panel 2 would flag a bug, not a modelling choice
+    (PLAN.md §2.7).
+    """
+    t = sim_results['t']
+    m = sim_results['m']
+    thrust = sim_results['u_T']
+
+    params = sim_setup['params']
+    m_dry = params['m_dry']
+    g = params['g']
+    isp = params['isp']
+
+    fig = Figure(figsize=(10, 7))
+    axes = fig.subplots(2, 1, sharex=True)
+
+    # ── Mass vs time ─────────────────────────────────────────────────────────
+    axes[0].plot(t, m, color=_WHITE, linewidth=1.5, label='m (actual)')
+    axes[0].axhline(m_dry, color=_WHITE, linestyle=':', linewidth=0.8, alpha=0.35, label='m_dry')
+    if m[-1] <= m_dry + 1e-6:
+        axes[0].plot(t[-1], m[-1], 'x', color=_RED, markersize=10, label='flameout')
+    axes[0].set_ylabel('m [kg]')
+    axes[0].set_title('Mass depletion over time')
+    axes[0].legend(loc='upper right', fontsize=8)
+    axes[0].grid(True)
+
+    # ── Cumulative impulse vs time, with propellant cross-check ────────────────
+    impulse_cum = cumulative_trapezoid(thrust, t, initial=0.0)
+    propellant_actual = m[0] - m  # actual mass consumed so far, same sign convention
+
+    axes[1].plot(t, impulse_cum, color=_WHITE, linewidth=1.5, label='∫T dt (impulse)')
+    axes[1].set_ylabel('Impulse [N·s]')
+    axes[1].set_xlabel('Time [s]')
+    axes[1].set_title('Cumulative impulse, with post-hoc vs. actual propellant cross-check')
+    axes[1].grid(True)
+
+    # Locked twin axis: impulse / (g*isp) is exactly the post-hoc propellant
+    # estimate, so the same curve reads directly in kg on the right.
+    prop_ax = axes[1].twinx()
+    lo, hi = axes[1].get_ylim()
+    prop_ax.set_ylim(lo / (g * isp), hi / (g * isp))
+    prop_ax.set_ylabel('Propellant [kg]')
+    prop_ax.tick_params(colors=_WHITE)
+    prop_ax.plot(t, propellant_actual, color=_RED, linestyle='--', linewidth=1.0,
+                 alpha=0.7, label='propellant consumed (actual)')
+
+    lines_1, labels_1 = axes[1].get_legend_handles_labels()
+    lines_2, labels_2 = prop_ax.get_legend_handles_labels()
+    axes[1].legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper left', fontsize=8)
+
+    fig.suptitle('Propellant Usage', fontsize=18, fontweight='bold')
     fig.tight_layout()
     return fig
 
@@ -304,6 +366,7 @@ def animate_descent(sim_results, sim_setup,
         t, [x, z, theta, delta, thr_act, thr_cmd, speed], fps, playback_speed
     )
     z_u_pos = np.interp(t_u, t, z)  # altitude for HUD (same as z_u, kept explicit)
+    prop_u = np.interp(t_u, t, sim_results['m']) - sim_setup['params']['m_dry']
 
     # Fixed axis limits (equal aspect) from trajectory + target extents, padded.
     tx = [p[0] for p in targets]
@@ -402,6 +465,7 @@ def animate_descent(sim_results, sim_setup,
             f'alt    = {z_u_pos[i]:6.1f} m\n'
             f'speed  = {sp_u[i]:6.2f} m/s\n'
             f'theta  = {np.degrees(th_u[i]):6.2f} deg\n'
+            f'prop   = {prop_u[i]:6.2f} kg\n'
             f'thrott   cmd={cmd_u[i] * 100:6.1f} %  act={act_u[i] * 100:6.1f} %'
         )
         return body, legs, flame, trail, hud

@@ -11,14 +11,16 @@
       "delta_max_deg": 12,
       "tilt_limit_deg": 10
     },
-    "controller_name": "Cascaded PD",
+    "controller_name": "LQR",
     "gains": {
-      "kp_x": 0.16,
-      "kd_x": 0.8,
-      "kp_z": 0.16,
-      "kd_z": 0.8,
-      "kp_theta": 16.0,
-      "kd_theta": 6.4
+      "x_dev": 20.0,
+      "z_dev": 10.0,
+      "xdot_dev": 10.0,
+      "zdot_dev": 2.0,
+      "theta_dev": 0.1745,
+      "thetadot_dev": 0.3,
+      "thrust_dev": 750.0,
+      "delta_dev": 0.2094
     },
     "phases": [
       {"x_target": 20.0, "z_target": 0.0, "t_end": 30.0}
