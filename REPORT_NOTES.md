@@ -5,8 +5,8 @@ they come up during implementation — newest section at the bottom of each them
 
 Distinguish two kinds of entry:
 - **[verified]** — checked numerically against the code in this repo during implementation.
-- **[from plan]** — asserted in `lqr_plan.md` / `lqr_implementation_notes.md`, carried here
-  because it belongs in the report, but not independently re-checked yet.
+- **[from plan]** — asserted in earlier working notes, carried here because it belongs
+  in the report, but not independently re-checked yet.
 
 ---
 
@@ -42,8 +42,8 @@ would not otherwise catch.
 
 ### 1.4 The corrected lateral transfer function [from plan]
 
-`lqr_implementation_notes.md` §1.8 gives `X(s)/dδ(s) = g²c/s⁴`. This is wrong — it drops
-the direct gimbal→lateral feedthrough that the same document's `B` matrix contains
+The reference derivation this project started from gives `X(s)/dδ(s) = g²c/s⁴`. This is
+wrong — it drops the direct gimbal→lateral feedthrough that its own `B` matrix contains
 (`B[2,1] = +g`). The correct channel is
 
 ```
@@ -247,8 +247,8 @@ All in the open left half-plane; matches the plan's predicted values. The domina
 
 ### 4.1 A verification test that does not verify what it claims [verified]
 
-`lqr_plan.md` §5 proposes `test_lqr_gain_structure` (asserting the structural zeros of
-`K`) as the guard against a state-ordering transposition in `bryson_weights`. **It does
+The original proposal for `test_lqr_gain_structure` was to assert the structural zeros of
+`K` as the guard against a state-ordering transposition in `bryson_weights`. **It does
 not work.** Permuting the diagonal entries of a diagonal `Q` leaves it diagonal, so the
 block split of `A`/`B` still yields a block-sparse `K` and the test passes clean.
 
@@ -271,9 +271,9 @@ a structural property the system would exhibit anyway.
 
 ### 4.2 Bryson's rule is a starting point, not a design [from plan]
 
-The `z_dev` sweep in `lqr_plan.md` §3 is the evidence: the notes' original `z_dev = 2.0`
-(chosen as a landing *accuracy*) crashes the vehicle at −15.0 m/s with thrust saturated 97%
-of the run, because it demands a 100 m error be zeroed as though 2 m were tolerable.
+An early `z_dev` sweep is the evidence: the original `z_dev = 2.0` (chosen as a landing
+*accuracy*) crashes the vehicle at −15.0 m/s with thrust saturated 97% of the run, because
+it demands a 100 m error be zeroed as though 2 m were tolerable.
 `z_dev = 10` (the scale of the *manoeuvre*) lands at −0.20 m/s.
 
 The transferable lesson: acceptable-deviation numbers must reflect the **scale of the
@@ -309,8 +309,8 @@ saturation early and wastes authority during the transient.
 
 Reproduced by running both scenarios end-to-end through `sim_run` on identical geometry
 (100 m drop, 20 m lateral offset, 1 m landing tolerance): `test_scenarios/default.json`
-(Cascaded PD) and `test_scenarios/lqr1.json` (LQR, tuned defaults). Matches `lqr_plan.md`
-§4's predicted table to within rounding.
+(Cascaded PD) and `test_scenarios/lqr1.json` (LQR, tuned defaults). Matches the predicted
+table from earlier working notes to within rounding.
 
 | | Cascaded PD | LQR (tuned) |
 |---|---|---|
