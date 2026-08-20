@@ -32,21 +32,22 @@ vtvl-sim/
 ├── uv.lock               — resolved dependency lockfile for reproducible installs
 ├── test_scenarios/
 │   ├── default.json      — canonical defaults, single source of truth for params
-│   └── scenario1.json    — example scenario: physical params, controller/gains, phases, outputs
+│   ├── scenario1.json    — example scenario: physical params, controller/gains, phases, outputs
+│   └── lqr1.json         — LQR head-to-head scenario, same geometry as default.json
 ├── src/
 │   └── vtvl_sim/
 │       ├── __init__.py         — public API surface (see "Using the engine")
 │       ├── params.py          — reference defaults for notebooks + tests (runtime config is JSON-driven)
 │       ├── paths.py           — centralised results-directory paths (no hardcoded absolute paths)
-│       ├── dynamics.py        — 3-DOF EOM
-│       ├── sim.py             — vtvl_solver/sim_run: solve_ivp wrapper, phase chaining, touchdown event
-│       ├── controllers.py     — Altitude PID, Attitude PD (inner-loop demo), Cascaded PD, LQR — all in CONTROLLER_REGISTRY
+│       ├── dynamics.py        — 3-DOF EOM over a 7-state vector (mass depletion via the Tsiolkovsky rate)
+│       ├── sim.py             — vtvl_solver/sim_run: solve_ivp wrapper, phase chaining, touchdown + propellant-exhaustion events
+│       ├── controllers.py     — Altitude PID, Attitude PD (inner-loop demo), Cascaded PD, LQR (gain-scheduled on mass) — all in CONTROLLER_REGISTRY
 │       ├── schemas.py         — Pydantic models validating scenario JSON files
 │       ├── scenario_io.py     — load_scenario / build_setup: JSON -> validated sim/solver/output setup
-│       ├── post_processing.py — CSV export, touchdown report, state/trajectory/engine metrics
+│       ├── post_processing.py — CSV export, touchdown/flameout report (with a post-hoc-vs-actual propellant cross-check), state/trajectory/engine/propellant metrics
 │       ├── guidance.py        — convex G-FOLD reference (stretch, empty stub)
 │       ├── run_scenarios.py   — CLI entrypoint: run a scenario JSON end to end
-│       └── plotting.py        — state/trajectory/engine plots, descent animation
+│       └── plotting.py        — state/trajectory/engine/propellant plots, descent animation (HUD includes propellant remaining)
 ├── notebooks/
 │   ├── check_sim.py         — baseline altitude-PID diagnostics
 │   ├── attitude_loop.py     — inner attitude-loop response + robustness
@@ -56,9 +57,11 @@ vtvl-sim/
 ├── PLAN.md               — LQR recap + theory, and the mass-depletion implementation plan
 ├── REPORT_NOTES.md       — running log of report-worthy findings, appended to as work proceeds
 └── tests/
-    ├── dynamics_test.py       — free-fall and hover equilibrium
+    ├── dynamics_test.py       — free-fall and mass-aware hover equilibrium
     ├── lqr_test.py            — controllability, closed-loop stability, gain structure, landing regression
-    └── attitude_test_plan.md  — inner-loop regression spec (planned, not yet written)
+    ├── mass_depletion_test.py — Tsiolkovsky mass conservation, propellant-exhaustion event, LQR gain-scheduling, both controllers under depletion
+    ├── attitude_test.py       — inner-loop regression: steady-state error, overshoot vs. linear prediction, sign convention, gimbal saturation
+    └── attitude_test_plan.md  — rationale/spec behind attitude_test.py
 ```
 
 ---
@@ -123,17 +126,37 @@ LQR trades speed for staying inside the linear/actuator-comfortable regime — s
 coordinates, the corrected lateral transfer function, the closed-form position-channel
 gains, and why the two channels tune independently).
 
-**Known limitation, next up:** the model is constant-mass. `LQRController` caches its
-gain `K` on the first call and never recomputes it — correct only because mass never
-changes today. `PLAN.md` §2 is the implementation plan for mass depletion, which breaks
-that assumption and requires gain-scheduling `K` on the instantaneous mass.
+> **Resolved in Week 4:** the constant-mass assumption below is gone — mass is now a
+> real state, and `LQRController` gain-schedules `K` on it every call instead of
+> caching a single value.
 
-### Week 4 — mass depletion, then guidance stretch + write-up (planned)
+### Week 4 — mass depletion (complete), guidance stretch + write-up (open)
 
-Mass depletion (`PLAN.md` §2) first — it's the natural next step now that both
-controllers exist to compare under it. After that: convex G-FOLD reference tracked by
-LQR, or Monte Carlo dispersion analysis if skipping guidance (open decision, see
-`PLAN.md` §3). Animation. README becomes the short technical report.
+`PLAN.md` §2 is fully implemented: mass is a 7th state (`dynamics.py`), integrated via
+the Tsiolkovsky rate `ṁ = -T/(g·Isp)`; `sim.py` injects the instantaneous mass into every
+controller call and adds a `propellant_expended` terminal event (mirroring `touchdown`),
+so a run that runs dry before landing is reported distinctly as a **flameout** rather than
+misread as a touchdown. `LQRController` no longer caches `K` — it gain-schedules on the
+live mass every call, while the three PD-based controllers needed **zero code changes**
+(their feedforward already re-read `params['m']` fresh every step). A new propellant-usage
+plot and an animation HUD readout track mass depletion visually; `write_sim_report` cross-
+checks the post-hoc thrust-integral propellant estimate against the ODE's actual integrated
+mass loss (they agree to <0.001 kg). Covered by `tests/mass_depletion_test.py` (4 tests)
+plus updated `dynamics_test.py`, alongside the previously-unwritten
+`tests/attitude_test.py` (4 tests) — full suite: **14/14 passing**.
+
+**Report-worthy result:** under a realistic `Isp = 200 s` and a 10–20% propellant margin,
+LQR's slow, low-thrust-effort strategy (§Week 3's headline: it spends time to save
+actuator authority) burns *more total propellant* than the cascade despite lower
+instantaneous thrust, and currently flames out short of touchdown on the same geometry the
+cascade lands on cleanly. Not a bug — a direct, documented consequence of gains tuned at
+constant mass; see `REPORT_NOTES.md` §7. A deliberate re-tune under the depleting-mass
+model is the natural next step (`PLAN.md` §2.8), deferred so the mechanism could be
+verified correct first.
+
+Still open: the guidance stretch choice — convex G-FOLD reference tracked by LQR, or
+Monte Carlo dispersion analysis if skipping guidance — and the eventual re-tune above.
+README becomes the short technical report once those settle.
 
 ---
 
@@ -143,18 +166,22 @@ Runtime configuration is JSON-driven — a run's parameters come from its scenar
 
 | Symbol | Value | Description |
 |--------|-------|-------------|
-| `m` | 200 kg | Dry mass |
-| `I` | 200 kg·m² | Pitch moment of inertia |
+| `m_dry` | 200 kg | Dry mass (propellant excluded) |
+| `I` | 200 kg·m² | Pitch moment of inertia (held constant — see below) |
 | `L` | 0.5 m | CoM-to-gimbal moment arm |
 | `g` | 9.81 m/s² | Gravitational acceleration |
+| `Isp` | 200 s | Specific impulse, against local `g` (not standard `g₀` — a stated simplification) |
 | `T_min` | 1000 N | Minimum throttle (0.4·T_max, non-zero) |
-| `T_max` | 2500 N | Maximum thrust (≈1.27× hover weight) |
+| `T_max` | 2500 N | Maximum thrust (≈1.27× hover weight at `m_dry`) |
 | `δ_max` | 12° | Gimbal deflection limit |
 | `tilt_limit` | 10° | Pitch reference clamp (outer-loop θ_cmd limit) |
 
-Mass depletion is planned next (`PLAN.md` §2); both controllers currently assume `m` is
-fixed for the run, and the head-to-head comparison above is only valid under that
-assumption.
+`initial_state.m` (wet mass) sets the propellant margin per scenario — e.g. 220 kg against
+`m_dry = 200 kg` is a 20 kg (10%) margin in `test_scenarios/lqr1.json`. Moment of inertia
+`I` does not shrink as propellant burns (would need a propellant mass-distribution
+assumption this project hasn't made elsewhere) — a stated simplification, not modelled.
+See `REPORT_NOTES.md` §7 for how tight that margin turns out to be against the tuned
+controllers' actual propellant use.
 
 ---
 
@@ -175,8 +202,14 @@ This is the contract the GUI depends on. Any change a consumer needs is a new ta
 
 ```toml
 # in the GUI's pyproject.toml
-dependencies = ["vtvl-sim @ git+https://github.com/dfps16/vtvl-sim.git@v0.2.0"]
+dependencies = ["vtvl-sim @ git+https://github.com/dfps16/vtvl-sim.git@v0.3.0"]
 ```
+
+**v0.3.0 is a breaking release for scenario files:** `ParamsSchema.m` is renamed to
+`m_dry`, and `LanderState` gains a required `m` field (wet mass, must exceed `m_dry`).
+Any GUI-side code that builds a `sim_setup`/`initial_state` dict directly needs both
+changes before bumping past `v0.2.0`. `sim_run`'s results dict gains one new key (`'m'`,
+the mass trajectory) — additive, not breaking.
 
 ---
 
