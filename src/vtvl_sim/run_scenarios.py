@@ -1,7 +1,7 @@
 import sys
 
 from vtvl_sim.paths import result_path
-from vtvl_sim.plotting import animate_descent, plot_engine, plot_state, plot_trajectory
+from vtvl_sim.plotting import animate_descent, plot_engine, plot_propellant, plot_state, plot_trajectory
 from vtvl_sim.post_processing import save_csv, write_sim_report
 from vtvl_sim.scenario_io import load_scenario
 from vtvl_sim.sim import sim_run
@@ -23,6 +23,10 @@ if __name__ == '__main__':
     if outputs['engine'] == 1:
         engine_plot = plot_engine(sim_results, sim_setup)
         engine_plot.savefig(result_path('last_sim_engine.png'), dpi=150)
+
+    if outputs['propellant'] == 1:
+        propellant_plot = plot_propellant(sim_results, sim_setup)
+        propellant_plot.savefig(result_path('last_sim_propellant.png'), dpi=150)
 
     if outputs['animation'] == 1:
         fig, anim, _ = animate_descent(

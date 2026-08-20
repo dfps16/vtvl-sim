@@ -339,17 +339,17 @@ class LQRController:
         # theta_target is ignored
         self._K = None
 
-    def _compute_K(self, params):
+    def _compute_gain_matrix(self, params):
         A, B = linearize_hover(params)
         Q, R = bryson_weights(self.targets)
-        self._K, *_ = control.lqr(A, B, Q, R)
+        K, *_ = control.lqr(A, B, Q, R)
+        self._K = K
         return self._K
 
     def control_law(self, state, params):
-        if self._K is None:
-            self._K = self._compute_K(params)  # This only works as long as mass is a constant
-        e = np.asarray(state) - self.reference_vector
-        du = - self._K @ e
+        self._K = self._compute_gain_matrix(params)  # This now recomputes the gain matrix every time
+        e = np.asarray(state[:6]) - self.reference_vector
+        du = - (self._K @ e)
         thrust = params['m'] * params['g'] + du[0]  # du only accounts for the deviation from hover,
         # we here restore the full thrust command
         delta = du[1]

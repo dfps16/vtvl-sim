@@ -28,9 +28,10 @@ class LanderState(BaseModel):
     zdot: float
     theta: float
     thetadot: float
+    m: PositiveFloat
 
     def to_list(self) -> list[float]:
-        return [self.x, self.z, self.xdot, self.zdot, self.theta, self.thetadot]
+        return [self.x, self.z, self.xdot, self.zdot, self.theta, self.thetadot, self.m]
 
 
 class Phase(BaseModel):
@@ -48,7 +49,7 @@ class Phase(BaseModel):
 class ParamsSchema(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
-    m: PositiveFloat
+    m_dry: PositiveFloat
     I: PositiveFloat
     L: PositiveFloat
     g: PositiveFloat
@@ -89,6 +90,13 @@ class ScenarioSetup(BaseModel):
                 f'gains missing required fields for {self.controller_name!r}: {sorted(missing)}'
             )
         return self
+    @model_validator(mode='after')
+    def check_initial_mass(self):
+        if self.initial_state.m <= self.params.m_dry:
+            raise ValueError(
+                f'initial mass {self.initial_state.m} must be greater than dry mass {self.params.m_dry}'
+            )
+        return self
 
 
 class SolverSetup(BaseModel):
@@ -109,3 +117,6 @@ class Outputs(BaseModel):
     # Defaulted (unlike its siblings) so scenario files written before the engine
     # plot existed still validate — extra='forbid' would otherwise reject them.
     engine: Literal[1, 0] = 1
+    # Same reasoning: defaulted so scenario files predating the propellant plot
+    # still validate.
+    propellant: Literal[1, 0] = 1

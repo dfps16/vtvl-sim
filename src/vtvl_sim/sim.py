@@ -8,18 +8,22 @@ from vtvl_sim.dynamics import lander_eom
 def closed_loop_rhs(t, state, sim_setup, controller):
     """RHS passed to solve_ivp: query controller, saturate actuators, return state derivatives."""
     params = sim_setup['params']
-    T, delta = controller(t, state, params)
+    ctrl_params = {**params, 'm': state[6]}
+    thrust, delta = controller(t, state, ctrl_params)
     # Clamp magnitude, then clamp gimbal angle
-    T = np.clip(T, params['T_min'], params['T_max'])
+    thrust = np.clip(thrust, params['T_min'], params['T_max'])
     delta = np.clip(delta, -params['delta_max'], params['delta_max'])
-    state_dot = lander_eom(t, state, T, delta, params)
+    state_dot = lander_eom(t, state, thrust, delta, params)
     return state_dot
 
 def touchdown_event(t, state, sim_setup, controller):
     z = state[1] # integration stops when z crosses zero from above
     touchdown = z - sim_setup['landing_tolerance']
     return touchdown
- 
+
+def propellant_expended_event(t, state, sim_setup, controller):
+    return state[6] - sim_setup['params']['m_dry']
+
 def vtvl_solver(state_0, x_target, z_target, theta_target, t_end, sim_setup, solver_setup):
 
     # Extracting the simulation setup
@@ -37,13 +41,16 @@ def vtvl_solver(state_0, x_target, z_target, theta_target, t_end, sim_setup, sol
     # Terminal + direction=-1: stop only when z is decreasing through zero (descending touchdown)
     touchdown_event.terminal = True
     touchdown_event.direction = -1
+
+    propellant_expended_event.terminal = True
+    propellant_expended_event.direction = -1
     
     sol = solve_ivp(
         closed_loop_rhs,
         (0.0, t_end),
         state_0,
         args=(sim_setup, controller),  # must be a tuple matching (params, controller) after (t, state)
-        events=touchdown_event,
+        events=(touchdown_event, propellant_expended_event),
         max_step=max_step,
         method=method
     )
@@ -55,6 +62,7 @@ def vtvl_solver(state_0, x_target, z_target, theta_target, t_end, sim_setup, sol
     zdot = sol.y[3]
     theta = sol.y[4]
     thetadot = sol.y[5]
+    m = sol.y[6]
 
     # Recover the per-step control diagnostics (applied thrust/gimbal and the
     # pre-saturation demands) by replaying each controller's stateless record()
@@ -63,7 +71,8 @@ def vtvl_solver(state_0, x_target, z_target, theta_target, t_end, sim_setup, sol
     # a given controller does not produce come back as NaN.
     recorded = {k: np.empty(t.size) for k in _RECORD_KEYS}
     for i in range(t.size):
-        rec = controller.record(sol.y[:, i], PARAMS)
+        ctrl_params_i = {**PARAMS, 'm': sol.y[6, i]}
+        rec = controller.record(sol.y[:, i], ctrl_params_i)
         for k in _RECORD_KEYS:
             recorded[k][i] = rec[k]
 
@@ -75,6 +84,7 @@ def vtvl_solver(state_0, x_target, z_target, theta_target, t_end, sim_setup, sol
         'zdot': zdot,
         'theta': theta,
         'thetadot': thetadot,
+        'm': m,
         **recorded,
     }
 
@@ -90,7 +100,7 @@ def sim_run(sim_setup, solver_setup):
         seg = vtvl_solver(state_n, x_target, z_target, theta_target, t_end, sim_setup, solver_setup)
         seg['t'] = seg['t'] + time_elapsed
         segments.append(seg)
-        state_n = [seg[k][-1] for k in ('x', 'z', 'xdot', 'zdot', 'theta', 'thetadot')]
+        state_n = [seg[k][-1] for k in ('x', 'z', 'xdot', 'zdot', 'theta', 'thetadot', 'm')]
         time_elapsed = seg['t'][-1]
 
     return {

@@ -9,6 +9,7 @@ dependencies = [
     "matplotlib==3.11.0",
     "control==0.10.2",
     "pydantic==2.13.4",
+    "scipy-stubs~=1.18.0",
 ]
 
 [dependency-groups]
